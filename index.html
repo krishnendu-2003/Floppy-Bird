@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="theme-color" content="#6C5A9C" />
+<title>Flappy Ticket</title>
+<meta name="description" content="Fly a ticket between London phone boxes." />
+<link rel="preload" href="assets/fonts/big-shoulders-latin-900-normal.woff2" as="font" type="font/woff2" crossorigin />
+<link rel="preload" href="assets/fonts/hanken-grotesk-latin-700-normal.woff2" as="font" type="font/woff2" crossorigin />
+<link rel="stylesheet" href="src/style.css" />
+</head>
+<body class="flappy">
+  <main class="fl-main">
+    <div id="stage" class="fl-stage" data-phase="ready">
+      <canvas id="game" aria-label="Flappy Ticket game. Press space or tap to flap." role="img"></canvas>
+      <div id="ready" class="fl-ready" aria-live="polite">
+        <h1>Flappy Ticket</h1>
+        <p>Tap, click or press space to flap. Fly between the phone boxes.</p>
+        <p id="ready-best" class="fl-best" hidden></p>
+      </div>
+      <button id="full" type="button" class="fl-full" aria-pressed="false" hidden>Full screen</button>
+      <div id="card" class="fl-card" role="dialog" aria-label="Game over" hidden></div>
+    </div>
+  </main>
+  <script src="src/game.js"></script>
+</body>
+</html>
