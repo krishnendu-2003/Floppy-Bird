@@ -142,12 +142,70 @@ body.flappy {
   font-weight: 700;
 }
 
-/* Keeps the prompt where the original's footer link would push it. */
-.fl-ready::after {
-  content: "";
+/* Sits where the original's footer link was. */
+.fl-ready-link {
   grid-row: 5;
   height: 21px;
   margin-top: 8px;
+  color: var(--fl-cream);
+  font-size: 13px;
+  line-height: 21px;
+  pointer-events: auto;
+}
+
+/* --- Ad bar ---
+   Sized per screen with Google's "exact size per screen width" pattern:
+   320x50 on phones and short landscape screens, 468x60, then 728x90. */
+:root {
+  --fl-ad-w: 320px;
+  --fl-ad-h: 50px;
+  --fl-ad-pad: 8px;
+}
+@media (min-width: 500px) and (min-height: 561px) {
+  :root { --fl-ad-w: 468px; --fl-ad-h: 60px; }
+}
+@media (min-width: 800px) and (min-height: 561px) {
+  :root { --fl-ad-w: 728px; --fl-ad-h: 90px; }
+}
+
+.fl-ad {
+  position: absolute;
+  left: 0;
+  right: 0;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  overflow: hidden;
+  padding: var(--fl-ad-pad) 0;
+  background: var(--fl-ink);
+}
+body[data-ad="top"] .fl-ad {
+  top: 0;
+  padding-top: calc(var(--fl-ad-pad) + env(safe-area-inset-top));
+}
+body[data-ad="bottom"] .fl-ad {
+  bottom: 0;
+  padding-bottom: calc(var(--fl-ad-pad) + env(safe-area-inset-bottom));
+}
+body[data-ad="top"] .fl-main {
+  top: calc(var(--fl-ad-h) + 2 * var(--fl-ad-pad) + env(safe-area-inset-top));
+}
+body[data-ad="bottom"] .fl-main {
+  bottom: calc(var(--fl-ad-h) + 2 * var(--fl-ad-pad) + env(safe-area-inset-bottom));
+}
+
+.fl-ad-slot {
+  flex: none;
+  width: var(--fl-ad-w);
+  height: var(--fl-ad-h);
+}
+
+.fl-ad-preview {
+  display: grid;
+  place-items: center;
+  border: 2px dashed #fff4dc8c;
+  color: #fff4dc8c;
+  font: 700 13px var(--f-ui);
 }
 
 /* --- Full screen toggle --- */
