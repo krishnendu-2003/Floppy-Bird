@@ -19,6 +19,9 @@ Enter flies again.
 | `index.html` | Page shell, ready overlay, game-over card container |
 | `src/style.css` | Full-screen stage, overlays, card, board |
 | `src/game.js` | Simulation, rendering, input, local scoreboard |
+| `src/ads.js` | Sticky AdSense banner bar (off until configured) |
+| `ads.txt` | AdSense authorised-seller line (placeholder ID) |
+| `privacy.html` | Privacy page with the disclosures AdSense requires |
 | `assets/fonts/` | Big Shoulders and Hanken Grotesk (SIL OFL 1.1, licences alongside) |
 
 No build step and no image assets: every sprite is drawn on a 2D canvas.
@@ -61,6 +64,36 @@ blur, tab switch and restart. The ceiling at y = −40 still ends the run, so
 holding too long is fatal, as in the original.
 
 Medals: Bronze 10, Silver 25, Gold 50, Platinum 100.
+
+## Ads
+
+`src/ads.js` puts one Google AdSense display unit in a dark bar pinned to
+the top (or bottom) of the screen. The bar is outside the game stage, so
+the game shrinks to fit beside it and taps on the ad never flap the ticket.
+Sizes follow AdSense's "exact size per screen width" pattern: 320×50 on
+phones and short landscape screens, 468×60 from 500 px wide, 728×90 from
+800 px wide.
+
+It renders nothing until configured. To preview the layout, open the page
+with `?adpreview`.
+
+To go live:
+
+1. Put the game on a domain you own; AdSense does not accept `*.vercel.app`.
+2. Sign up at AdSense, add the domain, and verify it by uncommenting the
+   `google-adsense-account` meta tag in `index.html` with your publisher ID.
+3. Replace `pub-XXXXXXXXXXXXXXXX` in `ads.txt` with the same ID (no `ca-`).
+4. After approval, create a **Display ad** unit and put its publisher ID and
+   `data-ad-slot` into `ADS` at the top of `src/ads.js`. Set `position` to
+   `'top'` or `'bottom'`.
+5. In AdSense, turn **Auto ads off** for this site (or at least anchor and
+   vignette ads): they would overlay the canvas, which is the accidental
+   click pattern AdSense penalises.
+6. In AdSense **Privacy & messaging**, publish a European regulations
+   (GDPR) consent message.
+
+Do not refresh the ad on a timer; AdSense policy forbids refreshing ads
+without a user request.
 
 ## Differences from the original
 
