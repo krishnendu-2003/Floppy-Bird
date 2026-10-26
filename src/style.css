@@ -1,73 +1,400 @@
+@font-face {
+  font-family: "Big Shoulders";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("../assets/fonts/big-shoulders-latin-700-normal.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Big Shoulders";
+  font-style: normal;
+  font-weight: 900;
+  font-display: swap;
+  src: url("../assets/fonts/big-shoulders-latin-900-normal.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Hanken Grotesk";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("../assets/fonts/hanken-grotesk-latin-400-normal.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Hanken Grotesk";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("../assets/fonts/hanken-grotesk-latin-500-normal.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Hanken Grotesk";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("../assets/fonts/hanken-grotesk-latin-700-normal.woff2") format("woff2");
+}
+
 :root {
-  --sky: #6C5A9C;
-  --sky-deep: #3E3263;
-  --ink: #241B3D;
-  --paper: #F7F1E3;
+  /* Read by game.js for canvas text. */
+  --f-sign: "Big Shoulders", Impact, sans-serif;
+  --f-ui: "Hanken Grotesk", system-ui, sans-serif;
+
+  --fl-ink: #2a2340;
+  --fl-red: #c8102e;
+  --fl-red-dark: #8e0a20;
+  --fl-cream: #fff4dc;
+  --fl-stub: #3b2a5c;
+  --fl-muted: #6a6078;
+  color-scheme: light;
 }
 
 * { box-sizing: border-box; }
 
-html, body {
-  margin: 0;
-  height: 100%;
-  background: var(--sky-deep);
-  color: var(--paper);
-  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+html, body { margin: 0; }
+
+body.flappy {
+  position: fixed;
+  inset: 0;
+  height: 100dvh;
+  overflow: hidden;
   overscroll-behavior: none;
-  touch-action: manipulation;
+  background: #7f6bae;
+  color: var(--fl-ink);
+  font-family: var(--f-ui);
 }
 
-body {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 12px;
-  padding: 16px;
+.flappy :focus-visible {
+  outline: 3px solid var(--fl-cream);
+  outline-offset: 2px;
+  box-shadow: 0 0 0 6px var(--fl-ink);
 }
 
-#stage {
-  position: relative;
-  line-height: 0;
-}
-
-#game {
-  display: block;
-  width: min(360px, calc(100vw - 32px));
-  height: auto;
-  max-height: calc(100vh - 96px);
-  aspect-ratio: 360 / 640;
-  border-radius: 10px;
-  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.45);
-  image-rendering: auto;
-  cursor: pointer;
-}
-
-#sound {
+.fl-main {
   position: absolute;
-  top: 10px;
-  right: 10px;
-  width: 30px;
-  height: 30px;
-  border: 0;
-  border-radius: 8px;
-  background: rgba(36, 27, 61, 0.55);
-  color: var(--paper);
+  inset: 0;
+}
+
+.fl-stage {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  background: #7f6bae;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  cursor: pointer;
+  container-type: inline-size;
+}
+
+.fl-stage canvas {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+[hidden] { display: none !important; }
+
+/* --- Ready screen --- */
+.fl-ready {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  grid-template-rows: auto 1fr auto auto auto;
+  justify-items: center;
+  padding:
+    calc(env(safe-area-inset-top) + clamp(96px, 16vh, 150px))
+    max(env(safe-area-inset-right), 16px)
+    calc(env(safe-area-inset-bottom) + 18px)
+    max(env(safe-area-inset-left), 16px);
+  text-align: center;
+  pointer-events: none;
+}
+
+.fl-ready h1 {
+  margin: 0;
+  font: 900 clamp(44px, min(12vw, 9vh), 96px) / 0.95 var(--f-sign);
+  letter-spacing: 0.01em;
+  color: #fff;
+  -webkit-text-stroke: 7px var(--fl-ink);
+  paint-order: stroke fill;
+}
+
+.fl-ready p {
+  grid-row: 3;
+  max-width: 28ch;
+  margin: 0;
+  padding: 7px 12px;
+  border-radius: 10px;
+  background: #2a2340d1;
+  color: var(--fl-cream);
   font-size: 15px;
-  line-height: 1;
+  line-height: 1.4;
+}
+
+.fl-ready p + p { margin-top: 6px; }
+
+.fl-ready .fl-best {
+  grid-row: 4;
+  font-weight: 700;
+}
+
+/* Keeps the prompt where the original's footer link would push it. */
+.fl-ready::after {
+  content: "";
+  grid-row: 5;
+  height: 21px;
+  margin-top: 8px;
+}
+
+/* --- Full screen toggle --- */
+.fl-full {
+  position: absolute;
+  z-index: 4;
+  right: max(env(safe-area-inset-right), 14px);
+  bottom: calc(env(safe-area-inset-bottom) + 14px);
+  padding: 7px 11px;
+  border: 2px solid var(--fl-cream);
+  border-radius: 9px;
+  background: #2a234099;
+  color: var(--fl-cream);
+  font: 700 13px var(--f-ui);
   cursor: pointer;
 }
 
-#sound[aria-pressed="false"] { opacity: 0.4; }
-
-#hint {
-  margin: 0;
-  font-size: 12px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  opacity: 0.55;
+@media (max-width: 560px) {
+  .fl-full { display: none; }
 }
 
-@media (max-height: 520px) {
-  #hint { display: none; }
+/* --- Game over card: a ticket with a medal stub --- */
+.fl-card {
+  position: absolute;
+  z-index: 5;
+  top: 50%;
+  left: 50%;
+  width: min(400px, 100% - 32px);
+  max-height: calc(100% - env(safe-area-inset-top) - env(safe-area-inset-bottom) - 24px);
+  overflow-y: auto;
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr);
+  border: 2.5px solid var(--fl-ink);
+  border-radius: 12px;
+  background: var(--fl-cream);
+  box-shadow: 0 16px 34px #2a234066;
+  cursor: default;
+  transform: translate(-50%, -50%);
+  animation: fl-drop 0.32s cubic-bezier(0.2, 1.4, 0.4, 1) both;
+}
+
+@keyframes fl-drop {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, -80%) rotate(-6deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fl-card { animation: none; }
+}
+
+.fl-card-stub {
+  display: grid;
+  place-items: center;
+  border-right: 3px dashed var(--fl-cream);
+  border-radius: 9px 0 0 9px;
+  background: var(--fl-stub);
+}
+
+.fl-card-medal {
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+  font: 900 22px var(--f-sign);
+  letter-spacing: 0.06em;
+  color: var(--fl-cream);
+}
+.fl-card-medal[data-medal="bronze"] { color: #e0a070; }
+.fl-card-medal[data-medal="silver"] { color: #d9dce6; }
+.fl-card-medal[data-medal="gold"] { color: #f2c14e; }
+.fl-card-medal[data-medal="platinum"] { color: #bff0ff; }
+.fl-card-medal[data-medal="none"] { color: #fff4dc8c; }
+
+.fl-card-body {
+  min-width: 0;
+  padding: 16px 16px 14px;
+}
+
+.fl-card-k {
+  margin: 0;
+  color: var(--fl-red);
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.fl-card-scores {
+  display: flex;
+  gap: 26px;
+  margin-top: 2px;
+}
+.fl-card-scores div { display: grid; }
+.fl-card-scores b {
+  font: 900 54px/1 var(--f-sign);
+  font-variant-numeric: tabular-nums;
+}
+.fl-card-scores span {
+  color: var(--fl-muted);
+  font-size: 13px;
+}
+
+.fl-card-note {
+  margin: 6px 0 0;
+  font-size: 14px;
+  line-height: 1.4;
+}
+
+.fl-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.fl-btn {
+  display: inline-block;
+  padding: 10px 15px;
+  border: 2px solid var(--fl-ink);
+  border-radius: 9px;
+  background: transparent;
+  color: var(--fl-ink);
+  font: 700 15px var(--f-ui);
+  text-decoration: none;
+  cursor: pointer;
+}
+.fl-btn:hover { background: #2a234014; }
+
+.fl-btn-go {
+  border-color: var(--fl-red-dark);
+  background: var(--fl-red);
+  color: #fff;
+}
+.fl-btn-go:hover { background: var(--fl-red-dark); }
+
+/* --- Board --- */
+.fl-board {
+  margin-top: 12px;
+  padding-top: 8px;
+  border-top: 2px solid var(--fl-ink);
+}
+.fl-board ol {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.fl-board li {
+  display: grid;
+  grid-template-columns: 1.4rem minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 8px;
+  padding: 3px 6px;
+  border-radius: 6px;
+  font-size: 14.5px;
+}
+.fl-board li.is-you { background: #c8102e1f; }
+.fl-board-n {
+  font: 900 16px var(--f-sign);
+  color: var(--fl-muted);
+}
+.fl-board-h {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.fl-board li b {
+  font: 900 18px var(--f-sign);
+  font-variant-numeric: tabular-nums;
+}
+.fl-board-empty,
+.fl-board-me {
+  margin: 4px 0 0;
+  color: var(--fl-muted);
+  font-size: 14px;
+}
+
+.fl-join {
+  display: grid;
+  gap: 5px;
+  margin-top: 10px;
+}
+.fl-join label {
+  font-size: 14px;
+  font-weight: 700;
+}
+.fl-join div {
+  display: flex;
+  gap: 6px;
+}
+.fl-join input {
+  flex: 1;
+  min-width: 0;
+  padding: 9px 11px;
+  border: 2px solid var(--fl-ink);
+  border-radius: 9px;
+  background: #fff;
+  color: var(--fl-ink);
+  font: 500 15px var(--f-ui);
+}
+.fl-join .fl-btn { padding: 9px 14px; }
+.fl-join .fl-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.fl-posting {
+  margin: 10px 0 0;
+  color: var(--fl-muted);
+  font-size: 13.5px;
+}
+.fl-posting button {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--fl-ink);
+  font: inherit;
+  font-weight: 700;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+/* Short landscape screens: board sits beside the scores. */
+@media (max-height: 560px) {
+  .fl-card {
+    grid-template-columns: 48px minmax(0, 1fr);
+    width: min(560px, 100% - 32px);
+  }
+  .fl-card-body {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: start;
+    column-gap: 18px;
+    padding: 10px 14px;
+  }
+  .fl-card-k,
+  .fl-card-scores,
+  .fl-card-note { grid-column: 1; }
+  .fl-board,
+  .fl-join,
+  .fl-posting { grid-column: 2; }
+  .fl-board {
+    grid-row: 1 / span 3;
+    margin-top: 0;
+    padding-top: 0;
+    border-top: 0;
+  }
+  .fl-card-actions { grid-column: 1 / -1; }
+  .fl-card-scores b { font-size: 40px; }
+  .fl-card-medal { font-size: 18px; }
+  .fl-card-note { font-size: 13px; }
 }

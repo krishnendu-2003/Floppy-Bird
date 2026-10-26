@@ -1,514 +1,744 @@
 /*
- * Flappy Ticket — a Flappy Bird style game.
- * Fly a conference ticket between London phone boxes.
+ * Flappy Ticket — fly a conference ticket between London phone boxes.
  *
- * All art is drawn procedurally on the canvas; no external assets.
- * Physics runs on a fixed 120 Hz accumulator so behaviour is identical
- * regardless of display refresh rate.
+ * Gameplay, physics constants, palette and scene layout match the game at
+ * flappyticket.com. Everything is drawn on a 2D canvas; the only binary
+ * assets are the two OFL fonts in assets/fonts.
+ *
+ * World units: the play field is 640 units tall and at least 280 wide.
+ * The canvas is scaled so 640 units fill the stage height, with any extra
+ * height added *above* the world (the ground stays at the bottom).
  */
 (function () {
   'use strict';
 
-  var canvas = document.getElementById('game');
-  var ctx = canvas.getContext('2d');
+  // --- World geometry ------------------------------------------------------
+  var WORLD_H = 640;
+  var MIN_W = 280;
+  var GROUND_Y = 556;          // top of the kerb
+  var SKY_TILE = 360;          // width of one repeating skyline tile
+  var BOX_W = 66;              // phone box width
 
-  // --- Logical play field -------------------------------------------------
-  var W = 360;
-  var H = 640;
-  var GROUND_H = 96;          // height of the pavement strip
-  var FLOOR = H - GROUND_H;   // y of the pavement surface
+  // --- Physics (units, units/s, units/s^2) --------------------------------
+  var STEP = 1 / 120;          // fixed simulation step
+  var MAX_FRAME = 0.05;        // longest frame we simulate in one go
+  var GRAVITY = 1650;
+  var FLAP_V = -470;
+  var MAX_FALL = 720;
+  var DEATH_HOP = -160;        // upward kick when you hit something
+  var SCROLL = 150;            // world scroll speed
+  var COL_SPACING = 214;       // distance between phone box columns
+  var COL_SPAWN_PAD = 30;      // columns spawn this far past the right edge
+  var GAP_MAX = 168;           // opening at score 0
+  var GAP_MIN = 138;           // narrowest opening
+  var GAP_SHRINK = 1.2;        // opening shrinks by this per point
+  var GAP_TOP = 70;            // opening never starts above this
+  var GAP_BOTTOM = 486;        // opening never ends below this
+  var CEILING = -40;
+  var READY_Y = 250.2;
+  var CARD_DELAY_MS = 650;
 
-  // --- Tuning constants (px, px/s, px/s^2) --------------------------------
-  var GRAVITY = 1400;
-  var FLAP_IMPULSE = -430;
-  var MAX_FALL = 640;
-  var PIPE_SPEED = 150;
-  var PIPE_W = 64;
-  var PIPE_GAP = 148;
-  var PIPE_SPACING = 212;     // horizontal distance between pipe centres
-  var GAP_MARGIN = 72;        // keeps a gap away from ceiling and pavement
-  var TICKET_X = 96;
-  var TICKET_W = 46;
-  var TICKET_H = 30;
-  var HIT_INSET = 4;          // forgiving hitbox, as in the original
-  var TILT_UP = -0.42;        // radians when flapping
-  var TILT_DOWN = 1.45;       // radians at terminal dive
-  var STEP = 1 / 120;
+  // --- Ticket sprite ------------------------------------------------------
+  var TICKET = { w: 46, h: 28, hit: 11 };
+  var TICKET_LABEL = 'BP26';
 
   // --- Palette ------------------------------------------------------------
-  var SKY_TOP = '#8275B4';
-  var SKY_BOTTOM = '#6C5A9C';
-  var INK = '#241B3D';
-  var PAPER = '#F7F1E3';
-  var BOX_RED = '#C3282D';
-  var BOX_RED_DARK = '#8E1B20';
-  var BOX_GLASS = '#2E2A4A';
-  var PAVEMENT = '#4C4368';
-  var PAVEMENT_LINE = '#3B3353';
-  var ACCENT = '#F2B544';
+  var INK = '#2A2340';
+  var RED = '#C8102E';
+  var RED_DARK = '#8E0A20';
+  var CREAM = '#FFF4DC';
+  var STUB = '#3B2A5C';
+  var SKY_TOP = '#7F6BAE';
+  var FAR_CITY = '#9A7FA8';
+  var NEAR_CITY = '#5A4868';
 
-  // --- State --------------------------------------------------------------
-  var READY = 0, PLAYING = 1, DEAD = 2;
-  var state = READY;
+  // Near skyline: [x, height] of each building in one 360-wide tile.
+  var STREET = [
+    [0, 44], [34, 56], [64, 48], [98, 62], [128, 46], [164, 58],
+    [196, 50], [230, 64], [262, 46], [296, 56], [328, 50]
+  ];
 
-  var ticket = { y: 0, vy: 0, rot: 0 };
-  var pipes = [];
-  var score = 0;
-  var best = 0;
-  var scrollX = 0;      // pavement / skyline scroll offset
-  var bobT = 0;         // idle bob timer
-  var flashA = 0;       // white hit flash alpha
-  var deadT = 0;        // seconds since death
+  var MEDALS = [
+    { at: 100, name: 'Platinum', note: 'Nobody does this. Screenshot it.' },
+    { at: 50, name: 'Gold', note: 'Fifty phone boxes. London is impressed.' },
+    { at: 25, name: 'Silver', note: '25 boxes. Halfway to gold.' },
+    { at: 10, name: 'Bronze', note: "Ten boxes. You're getting the hang of it." }
+  ];
 
-  try {
-    best = parseInt(window.localStorage.getItem('flappyticket.best'), 10) || 0;
-  } catch (e) { best = 0; }
+  function medalFor(score) {
+    for (var i = 0; i < MEDALS.length; i++) if (score >= MEDALS[i].at) return MEDALS[i];
+    return null;
+  }
 
-  // --- Audio --------------------------------------------------------------
-  var audioOn = true;
-  var actx = null;
+  function ticketX(w) {
+    return Math.round(Math.max(80, Math.min(240, 0.27 * w)));
+  }
 
-  function beep(freq, dur, type, gain) {
-    if (!audioOn) return;
+  // --- Storage ------------------------------------------------------------
+  var KEY_BEST = 'flappyticket.best';
+  var KEY_HANDLE = 'flappyticket.handle';
+  var KEY_BOARD = 'flappyticket.board';
+
+  function load(key, fallback) {
     try {
-      if (!actx) actx = new (window.AudioContext || window.webkitAudioContext)();
-      if (actx.state === 'suspended') actx.resume();
-      var o = actx.createOscillator();
-      var g = actx.createGain();
-      o.type = type || 'square';
-      o.frequency.setValueAtTime(freq, actx.currentTime);
-      g.gain.setValueAtTime(gain || 0.05, actx.currentTime);
-      g.gain.exponentialRampToValueAtTime(0.0001, actx.currentTime + dur);
-      o.connect(g).connect(actx.destination);
-      o.start();
-      o.stop(actx.currentTime + dur);
-    } catch (e) { /* audio is optional */ }
+      var v = window.localStorage.getItem(key);
+      return v === null ? fallback : v;
+    } catch (e) { return fallback; }
+  }
+  function save(key, value) {
+    try { window.localStorage.setItem(key, value); } catch (e) { /* private mode */ }
+  }
+  function forget(key) {
+    try { window.localStorage.removeItem(key); } catch (e) { /* private mode */ }
   }
 
-  var sndFlap = function () { beep(560, 0.07, 'square', 0.04); };
-  var sndScore = function () { beep(880, 0.09, 'triangle', 0.05); };
-  var sndHit = function () { beep(150, 0.18, 'sawtooth', 0.06); };
-  var sndDie = function () { beep(90, 0.32, 'sawtooth', 0.05); };
+  function readBest() { return Number(load(KEY_BEST, 0)) || 0; }
 
-  // --- Skyline (deterministic, generated once) ----------------------------
-  var skyline = (function () {
-    var out = [];
-    var x = 0;
-    var seed = 20260926;
-    function rnd() { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; }
-    while (x < W * 2 + 120) {
-      var w = 26 + Math.round(rnd() * 34);
-      var h = 40 + Math.round(rnd() * 90);
-      out.push({ x: x, w: w, h: h, spire: rnd() > 0.78 });
-      x += w + 6 + Math.round(rnd() * 10);
-    }
-    return { buildings: out, width: x };
-  })();
-
-  // --- Pipes --------------------------------------------------------------
-  function spawnPipe(x) {
-    var min = GAP_MARGIN;
-    var max = FLOOR - GAP_MARGIN - PIPE_GAP;
-    var gapY = min + Math.random() * (max - min);
-    pipes.push({ x: x, gapY: gapY, scored: false });
+  function readBoard() {
+    try {
+      var rows = JSON.parse(load(KEY_BOARD, '[]'));
+      return Array.isArray(rows) ? rows : [];
+    } catch (e) { return []; }
   }
 
-  function resetWorld() {
-    pipes.length = 0;
-    for (var i = 0; i < 4; i++) spawnPipe(W + 110 + i * PIPE_SPACING);
-    ticket.y = H * 0.42;
-    ticket.vy = 0;
-    ticket.rot = 0;
-    score = 0;
-    deadT = 0;
-    flashA = 0;
-  }
-
-  resetWorld();
-
-  // --- Input --------------------------------------------------------------
-  function flap() {
-    if (state === READY) {
-      state = PLAYING;
-      ticket.vy = FLAP_IMPULSE;
-      sndFlap();
-    } else if (state === PLAYING) {
-      ticket.vy = FLAP_IMPULSE;
-      sndFlap();
-    } else if (state === DEAD && deadT > 0.65) {
-      state = READY;
-      resetWorld();
-    }
-  }
-
-  canvas.addEventListener('pointerdown', function (e) { e.preventDefault(); flap(); });
-  window.addEventListener('keydown', function (e) {
-    if (e.code === 'Space' || e.code === 'ArrowUp' || e.code === 'Enter') {
-      e.preventDefault();
-      flap();
-    }
-  });
-
-  var soundBtn = document.getElementById('sound');
-  if (soundBtn) {
-    soundBtn.addEventListener('click', function () {
-      audioOn = !audioOn;
-      soundBtn.setAttribute('aria-pressed', String(audioOn));
-    });
-  }
-
-  // --- Simulation ---------------------------------------------------------
-  function hitsPipe(p) {
-    var bx = TICKET_X - TICKET_W / 2 + HIT_INSET;
-    var bw = TICKET_W - HIT_INSET * 2;
-    var by = ticket.y - TICKET_H / 2 + HIT_INSET;
-    var bh = TICKET_H - HIT_INSET * 2;
-    if (bx + bw < p.x || bx > p.x + PIPE_W) return false;
-    return by < p.gapY || by + bh > p.gapY + PIPE_GAP;
-  }
-
-  function die() {
-    if (state !== PLAYING) return;
-    state = DEAD;
-    deadT = 0;
-    flashA = 0.85;
-    sndHit();
-    window.setTimeout(sndDie, 120);
-    if (score > best) {
-      best = score;
-      try { window.localStorage.setItem('flappyticket.best', String(best)); } catch (e) { /* ignore */ }
-    }
-  }
-
-  function step(dt) {
-    bobT += dt;
-    if (flashA > 0) flashA = Math.max(0, flashA - dt * 3.2);
-
-    if (state === READY) {
-      ticket.y = H * 0.42 + Math.sin(bobT * 4.2) * 7;
-      ticket.rot = Math.sin(bobT * 4.2) * 0.09;
-      scrollX = (scrollX + PIPE_SPEED * dt) % 10000;
-      return;
-    }
-
-    if (state === DEAD) {
-      deadT += dt;
-      // The ticket keeps falling to the pavement after a hit.
-      ticket.vy = Math.min(ticket.vy + GRAVITY * dt, MAX_FALL);
-      ticket.y += ticket.vy * dt;
-      if (ticket.y > FLOOR - TICKET_H / 2) {
-        ticket.y = FLOOR - TICKET_H / 2;
-        ticket.vy = 0;
+  // Keeps each handle's best, sorted high to low.
+  function postScore(handle, score) {
+    var rows = readBoard();
+    var found = false;
+    for (var i = 0; i < rows.length; i++) {
+      if (rows[i].handle === handle) {
+        rows[i].best = Math.max(rows[i].best, score);
+        found = true;
       }
-      ticket.rot = Math.min(ticket.rot + dt * 5.5, TILT_DOWN);
-      return;
     }
-
-    // PLAYING
-    scrollX = (scrollX + PIPE_SPEED * dt) % 10000;
-    ticket.vy = Math.min(ticket.vy + GRAVITY * dt, MAX_FALL);
-    ticket.y += ticket.vy * dt;
-
-    // Rotation follows vertical velocity, as in the original.
-    var t = (ticket.vy - FLAP_IMPULSE) / (MAX_FALL - FLAP_IMPULSE);
-    ticket.rot = TILT_UP + Math.max(0, Math.min(1, t)) * (TILT_DOWN - TILT_UP);
-
-    for (var i = 0; i < pipes.length; i++) {
-      var p = pipes[i];
-      p.x -= PIPE_SPEED * dt;
-      if (!p.scored && p.x + PIPE_W < TICKET_X - TICKET_W / 2) {
-        p.scored = true;
-        score++;
-        sndScore();
-      }
-      if (hitsPipe(p)) { die(); return; }
-    }
-
-    while (pipes.length && pipes[0].x + PIPE_W < -40) {
-      pipes.shift();
-      spawnPipe(pipes[pipes.length - 1].x + PIPE_SPACING);
-    }
-
-    if (ticket.y + TICKET_H / 2 > FLOOR) {
-      ticket.y = FLOOR - TICKET_H / 2;
-      die();
-      return;
-    }
-    if (ticket.y - TICKET_H / 2 < 0) {
-      ticket.y = TICKET_H / 2;
-      ticket.vy = 0;
-    }
+    if (!found) rows.push({ handle: handle, best: score });
+    rows.sort(function (a, b) { return b.best - a.best; });
+    save(KEY_BOARD, JSON.stringify(rows.slice(0, 50)));
+    return rows;
   }
 
-  // --- Rendering ----------------------------------------------------------
-  function drawSky() {
-    var g = ctx.createLinearGradient(0, 0, 0, FLOOR);
-    g.addColorStop(0, SKY_TOP);
-    g.addColorStop(1, SKY_BOTTOM);
-    ctx.fillStyle = g;
-    ctx.fillRect(0, 0, W, FLOOR);
+  // --- Game state ---------------------------------------------------------
+  function freshState(w) {
+    return {
+      phase: 'ready',
+      w: w,
+      tx: ticketX(w),
+      y: READY_Y,
+      v: 0,
+      cols: [],
+      score: 0,
+      t: 0,
+      flapAt: -1,
+      deadAt: 0
+    };
+  }
 
-    // Slow drifting cloud bands.
-    ctx.fillStyle = 'rgba(255,255,255,0.07)';
-    var off = (scrollX * 0.18) % (W + 200);
-    for (var i = -1; i < 3; i++) {
-      var cx = i * (W + 200) - off + 60;
+  function makeColumn(x, score, rand) {
+    var gap = Math.max(GAP_MIN, GAP_MAX - GAP_SHRINK * score);
+    var lo = GAP_TOP + gap / 2;
+    var hi = GAP_BOTTOM - gap / 2;
+    return { x: x, gapY: lo + rand() * (hi - lo), gap: gap, scored: false };
+  }
+
+  // Circle (the ticket's hit radius) against the ground, ceiling and boxes.
+  function collides(s) {
+    var r = TICKET.hit;
+    if (s.y + r >= GROUND_Y || s.y - r <= CEILING) return true;
+    for (var i = 0; i < s.cols.length; i++) {
+      var c = s.cols[i];
+      var spans = [[-1000, c.gapY - c.gap / 2], [c.gapY + c.gap / 2, WORLD_H]];
+      for (var j = 0; j < 2; j++) {
+        var nx = Math.max(c.x, Math.min(s.tx, c.x + BOX_W));
+        var ny = Math.max(spans[j][0], Math.min(s.y, spans[j][1]));
+        var dx = s.tx - nx, dy = s.y - ny;
+        if (dx * dx + dy * dy < r * r) return true;
+      }
+    }
+    return false;
+  }
+
+  // Advances one fixed step. Returns true on the step the ticket dies.
+  function tick(s, rand) {
+    s.t += STEP;
+
+    if (s.phase === 'ready') {
+      s.y = READY_Y + 6 * Math.sin(5 * s.t);
+      return false;
+    }
+
+    s.v = Math.min(MAX_FALL, s.v + GRAVITY * STEP);
+    s.y += s.v * STEP;
+
+    if (s.phase === 'dead') {
+      if (s.y > GROUND_Y - TICKET.h / 2) {
+        s.y = GROUND_Y - TICKET.h / 2;
+        s.v = 0;
+      }
+      return false;
+    }
+
+    for (var i = 0; i < s.cols.length; i++) s.cols[i].x -= SCROLL * STEP;
+    if (s.cols.length && s.cols[0].x < -BOX_W) s.cols.shift();
+
+    var last = s.cols[s.cols.length - 1];
+    if (!last || last.x < s.w - COL_SPACING) {
+      var x = Math.max((last ? last.x : 0) + COL_SPACING, s.w + COL_SPAWN_PAD);
+      s.cols.push(makeColumn(x, s.score, rand));
+    }
+
+    for (var k = 0; k < s.cols.length; k++) {
+      var c = s.cols[k];
+      if (!c.scored && c.x + BOX_W < s.tx) {
+        c.scored = true;
+        s.score++;
+      }
+    }
+
+    if (collides(s)) {
+      s.phase = 'dead';
+      s.deadAt = s.t;
+      s.v = Math.min(s.v, DEATH_HOP);
+      return true;
+    }
+    return false;
+  }
+
+  // --- Drawing ------------------------------------------------------------
+  function drawFarCity(ctx, x, variant) {
+    var base = 520;
+    var hasTower = variant !== 2;
+
+    ctx.fillStyle = FAR_CITY;
+    ctx.strokeStyle = FAR_CITY;
+    ctx.beginPath();
+    ctx.rect(x, base, SKY_TILE, 40);
+    ctx.rect(x + 6, base - 34, 70, 34);
+    if (hasTower) {
+      // Clock tower with its spire.
+      ctx.rect(x + 40, base - 128, 16, 128);
+      ctx.moveTo(x + 38, base - 128);
+      ctx.lineTo(x + 48, base - 160);
+      ctx.lineTo(x + 58, base - 128);
+    }
+    // Domed cathedral.
+    ctx.rect(x + 206, base - 40, 56, 40);
+    ctx.moveTo(x + 210, base - 40);
+    ctx.arc(x + 234, base - 40, 24, Math.PI, 0);
+    ctx.rect(x + 231, base - 78, 6, 16);
+    if (variant !== 2) {
+      // The tall glass spike.
+      ctx.moveTo(x + 278, base);
+      ctx.lineTo(x + 300, base - 176);
+      ctx.lineTo(x + 318, base);
+    }
+    ctx.fill();
+
+    if (variant !== 1) {
+      // The egg-shaped tower.
       ctx.beginPath();
-      ctx.ellipse(cx, 120, 90, 26, 0, 0, Math.PI * 2);
+      ctx.ellipse(x + 340, base - 44, 13, 46, 0, 0, Math.PI * 2);
       ctx.fill();
+
+      // Observation wheel: rim, spokes, A-frame legs.
+      var cx = x + 140, cy = base - 62;
+      ctx.lineWidth = 3;
       ctx.beginPath();
-      ctx.ellipse(cx + 130, 72, 64, 19, 0, 0, Math.PI * 2);
+      ctx.arc(cx, cy, 52, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      for (var i = 0; i < 12; i++) {
+        var a = (i / 12) * Math.PI * 2;
+        ctx.moveTo(cx, cy);
+        ctx.lineTo(cx + 52 * Math.cos(a), cy + 52 * Math.sin(a));
+      }
+      ctx.stroke();
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      ctx.moveTo(x + 118, base);
+      ctx.lineTo(cx, cy);
+      ctx.lineTo(x + 162, base);
+      ctx.stroke();
+    }
+
+    if (hasTower) {
+      ctx.fillStyle = '#F3DDB8';
+      ctx.beginPath();
+      ctx.arc(x + 48, base - 110, 5, 0, Math.PI * 2);
       ctx.fill();
     }
   }
 
-  function drawSkyline() {
-    var off = (scrollX * 0.34) % skyline.width;
-    ctx.fillStyle = 'rgba(36,27,61,0.42)';
-    for (var pass = 0; pass < 2; pass++) {
-      var base = pass * skyline.width - off;
-      for (var i = 0; i < skyline.buildings.length; i++) {
-        var b = skyline.buildings[i];
-        var x = base + b.x;
-        if (x > W || x + b.w < 0) continue;
-        ctx.fillRect(x, FLOOR - b.h, b.w, b.h);
-        if (b.spire) {
-          ctx.beginPath();
-          ctx.moveTo(x + b.w / 2 - 3, FLOOR - b.h);
-          ctx.lineTo(x + b.w / 2, FLOOR - b.h - 22);
-          ctx.lineTo(x + b.w / 2 + 3, FLOOR - b.h);
-          ctx.closePath();
-          ctx.fill();
+  function drawStreet(ctx, x) {
+    ctx.fillStyle = NEAR_CITY;
+    ctx.beginPath();
+    for (var i = 0; i < STREET.length; i++) {
+      var bx = STREET[i][0], bh = STREET[i][1];
+      var bw = (STREET[i + 1] ? STREET[i + 1][0] : SKY_TILE) - bx;
+      ctx.rect(x + bx, GROUND_Y - bh, bw + 0.5, bh);
+      ctx.rect(x + bx + bw - 10, GROUND_Y - bh - 9, 5, 9); // chimney
+    }
+    ctx.fill();
+
+    ctx.fillStyle = '#FFD58A';
+    for (var j = 0; j < STREET.length; j++) {
+      if (j % 3 === 1) continue;
+      var wx = STREET[j][0], wh = STREET[j][1];
+      ctx.fillRect(x + wx + 8, GROUND_Y - wh + 12, 6, 8);
+      if (wh > 50) ctx.fillRect(x + wx + 18, GROUND_Y - wh + 26, 6, 8);
+    }
+  }
+
+  // One phone box stack, from the gap edge `edge` out to `end`.
+  // dir = 1 grows downwards (bottom stack), -1 upwards (top stack).
+  function drawPhoneBoxes(ctx, x, edge, end, dir, font) {
+    var top = Math.min(edge, end);
+    var height = Math.abs(end - edge);
+    var down = dir === 1;
+
+    ctx.fillStyle = RED;
+    ctx.fillRect(x, top, BOX_W, height);
+
+    // Roof cornice at the gap.
+    ctx.fillStyle = RED_DARK;
+    ctx.fillRect(x - 3, edge + (down ? 0 : -6), 72, 6);
+
+    // TELEPHONE sign.
+    var signY = edge + 10 * dir;
+    ctx.fillStyle = '#1F1A26';
+    ctx.fillRect(x + 6, down ? signY : signY - 11, 54, 11);
+    ctx.fillStyle = CREAM;
+    ctx.font = '700 8px ' + font;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('TELEPHONE', x + 33, down ? signY + 5.5 : signY - 5.5);
+
+    // Stacked boxes: a divider band and a 3 x 5 grid of lit panes each.
+    var first = edge + 26 * dir;
+    for (var n = 0; n < 12; n++) {
+      var by = down ? first + 92 * n : first - (n + 1) * 92;
+      if (down ? by > end : by + 92 < end) break;
+      ctx.fillStyle = RED_DARK;
+      ctx.fillRect(x, by + (down ? 86 : 0), BOX_W, 6);
+      ctx.fillStyle = '#F3D9A8';
+      for (var row = 0; row < 5; row++) {
+        for (var col = 0; col < 3; col++) {
+          ctx.fillRect(x + 10 + 16 * col, by + 10 + 14 * row, 12, 10);
         }
       }
     }
+
+    ctx.fillStyle = 'rgba(0,0,0,.16)';
+    ctx.fillRect(x + BOX_W - 6, top, 6, height);
   }
 
-  function drawPhoneBox(x, top, height, flipped) {
-    if (height <= 0) return;
+  function drawTicket(ctx, s, font) {
+    var w = TICKET.w, h = TICKET.h;
+    var tilt = s.phase === 'ready' ? 0 : Math.max(-0.42, Math.min(1.25, s.v / 560));
+    var sinceFlap = s.t - (s.flapAt < 0 ? -10 : s.flapAt);
+    var beat = sinceFlap < 0.3
+      ? Math.sin((sinceFlap / 0.3) * Math.PI * 2)
+      : 0.35 * Math.sin(7 * s.t);
+    var wingBeat = s.phase === 'dead' ? 0.2 : beat;
+
     ctx.save();
-    ctx.translate(x, top);
-    if (flipped) {
-      ctx.translate(PIPE_W / 2, height / 2);
-      ctx.rotate(Math.PI);
-      ctx.translate(-PIPE_W / 2, -height / 2);
+    ctx.translate(s.tx, s.y);
+    ctx.rotate(tilt);
+
+    function wing(fill, x, squash) {
+      ctx.save();
+      ctx.translate(x, -h / 2 + 3);
+      ctx.rotate(-0.5 - 0.7 * wingBeat);
+      ctx.scale(1, squash);
+      ctx.fillStyle = fill;
+      ctx.strokeStyle = INK;
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      ctx.quadraticCurveTo(-6, -26, -30, -30);
+      ctx.quadraticCurveTo(-24, -22, -28, -18);
+      ctx.quadraticCurveTo(-20, -14, -24, -9);
+      ctx.quadraticCurveTo(-14, -6, -14, 0);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+      ctx.restore();
     }
 
-    // Body
-    ctx.fillStyle = BOX_RED;
-    ctx.fillRect(0, 0, PIPE_W, height);
-    // Shading
-    ctx.fillStyle = 'rgba(0,0,0,0.18)';
-    ctx.fillRect(PIPE_W - 11, 0, 11, height);
-    ctx.fillStyle = 'rgba(255,255,255,0.12)';
-    ctx.fillRect(5, 0, 6, height);
+    wing('#E4DDF0', 4, 0.9);
 
-    // Glass panes down the shaft
-    ctx.fillStyle = BOX_GLASS;
-    var paneW = PIPE_W - 26;
-    var paneH = 20;
-    var y = 34;
-    while (y + paneH < height - 6) {
-      ctx.fillRect(13, y, paneW, paneH);
-      y += paneH + 7;
-    }
-
-    // Crown: cornice and lit "TELEPHONE" sign at the mouth of the gap
-    ctx.fillStyle = BOX_RED_DARK;
-    ctx.fillRect(-5, 0, PIPE_W + 10, 26);
-    ctx.fillStyle = BOX_RED;
-    ctx.fillRect(-5, 0, PIPE_W + 10, 6);
-    ctx.fillStyle = ACCENT;
-    ctx.fillRect(7, 9, PIPE_W - 14, 10);
-    ctx.fillStyle = BOX_RED_DARK;
-    for (var i = 0; i < 7; i++) ctx.fillRect(11 + i * 7, 12, 3, 4);
-
-    ctx.restore();
-  }
-
-  function drawPipes() {
-    for (var i = 0; i < pipes.length; i++) {
-      var p = pipes[i];
-      if (p.x > W || p.x + PIPE_W < 0) continue;
-      drawPhoneBox(p.x, 0, p.gapY, true);
-      drawPhoneBox(p.x, p.gapY + PIPE_GAP, FLOOR - (p.gapY + PIPE_GAP), false);
-    }
-  }
-
-  function drawGround() {
-    ctx.fillStyle = PAVEMENT;
-    ctx.fillRect(0, FLOOR, W, GROUND_H);
-    ctx.fillStyle = 'rgba(255,255,255,0.10)';
-    ctx.fillRect(0, FLOOR, W, 4);
-
-    // Scrolling paving slabs
-    ctx.fillStyle = PAVEMENT_LINE;
-    var slab = 40;
-    var off = scrollX % slab;
-    for (var x = -off; x < W; x += slab) ctx.fillRect(x, FLOOR + 10, 2, GROUND_H - 10);
-    ctx.fillRect(0, FLOOR + 34, W, 2);
-  }
-
-  function drawTicket() {
-    ctx.save();
-    ctx.translate(TICKET_X, ticket.y);
-    ctx.rotate(ticket.rot);
-
-    var w = TICKET_W, h = TICKET_H;
-    var x = -w / 2, y = -h / 2;
-    var flapPhase = state === PLAYING || state === READY
-      ? Math.sin(bobT * 18) * (ticket.vy < 0 ? 2.5 : 1)
-      : 0;
-
-    // Shadow
-    ctx.fillStyle = 'rgba(0,0,0,0.25)';
-    ctx.fillRect(x + 2, y + 3, w, h);
-
-    // Ticket body
-    ctx.fillStyle = PAPER;
-    ctx.fillRect(x, y, w, h);
-
-    // Stub, separated by a perforation
-    ctx.fillStyle = ACCENT;
-    ctx.fillRect(x, y, 13, h);
-    ctx.fillStyle = 'rgba(36,27,61,0.45)';
-    for (var i = 2; i < h; i += 5) ctx.fillRect(x + 13, y + i, 1, 2);
-
-    // Printed lines
-    ctx.fillStyle = INK;
-    ctx.fillRect(x + 18, y + 7, 22, 3);
-    ctx.fillRect(x + 18, y + 13, 16, 2);
-    ctx.fillRect(x + 18, y + 18, 20, 2);
-
-    // Border
+    // Ticket body.
+    ctx.fillStyle = CREAM;
     ctx.strokeStyle = INK;
     ctx.lineWidth = 2;
-    ctx.strokeRect(x + 1, y + 1, w - 2, h - 2);
-
-    // Wing — flaps as the ticket climbs
-    ctx.fillStyle = '#D9CBFF';
-    ctx.strokeStyle = INK;
     ctx.beginPath();
-    ctx.moveTo(x + 16, y + 4);
-    ctx.quadraticCurveTo(x + 4, y - 12 + flapPhase, x + 30, y - 6 + flapPhase);
-    ctx.quadraticCurveTo(x + 26, y + 2, x + 16, y + 4);
-    ctx.closePath();
+    ctx.roundRect(-w / 2, -h / 2, w, h, 4);
     ctx.fill();
     ctx.stroke();
 
+    // Stub with perforation.
+    ctx.fillStyle = STUB;
+    ctx.beginPath();
+    ctx.roundRect(-w / 2 + 1, -h / 2 + 1, 12, h - 2, [3, 0, 0, 3]);
+    ctx.fill();
+    ctx.fillStyle = CREAM;
+    for (var i = 0; i < 5; i++) ctx.fillRect(-w / 2 + 13, -h / 2 + 3 + 5 * i, 1.5, 2.5);
+
+    // Printed label, underline and hole punch.
+    ctx.fillStyle = INK;
+    ctx.font = '900 11px ' + font;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(TICKET_LABEL, 6, -2);
+    ctx.fillStyle = RED;
+    ctx.fillRect(-4, 6, 20, 2.5);
+    ctx.fillStyle = INK;
+    ctx.beginPath();
+    ctx.arc(17, -6, 2, 0, Math.PI * 2);
+    ctx.fill();
+
+    wing('#FFFFFF', -2, 1);
     ctx.restore();
   }
 
-  function pixelText(text, cx, y, size, color, outline) {
-    ctx.font = '700 ' + size + 'px ui-monospace, Menlo, Consolas, monospace';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    if (outline !== false) {
-      ctx.lineWidth = Math.max(3, size * 0.16);
-      ctx.strokeStyle = INK;
-      ctx.lineJoin = 'round';
-      ctx.strokeText(text, cx, y);
+  // --- Boot ---------------------------------------------------------------
+  var stage = document.getElementById('stage');
+  var canvas = document.getElementById('game');
+  var ctx = canvas.getContext('2d');
+  var readyEl = document.getElementById('ready');
+  var bestEl = document.getElementById('ready-best');
+  var fullBtn = document.getElementById('full');
+  var cardEl = document.getElementById('card');
+
+  var css = getComputedStyle(document.documentElement);
+  var signFont = css.getPropertyValue('--f-sign').trim() || 'sans-serif';
+  var uiFont = css.getPropertyValue('--f-ui').trim() || 'sans-serif';
+  var reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  var state = freshState(MIN_W);
+  var best = readBest();
+  var handle = load(KEY_HANDLE, '');
+  var lastRun = null;         // { score, best, record } once the card is up
+  var cardTimer = 0;
+  var skyGradient = null;
+  var topPad = 0;             // world units of extra sky above y = 0
+
+  // --- Layout -------------------------------------------------------------
+  function resize() {
+    var dpr = Math.min(window.devicePixelRatio || 1, 2.5);
+    var cw = stage.clientWidth;
+    var ch = stage.clientHeight;
+    var scale = ch / WORLD_H;
+    var worldW = cw / scale;
+    if (worldW < MIN_W) {
+      scale = cw / MIN_W;
+      worldW = MIN_W;
     }
-    ctx.fillStyle = color || PAPER;
-    ctx.fillText(text, cx, y);
+    topPad = ch / scale - WORLD_H;
+    canvas.width = Math.round(cw * dpr);
+    canvas.height = Math.round(ch * dpr);
+    ctx.setTransform(dpr * scale, 0, 0, dpr * scale, 0, dpr * scale * topPad);
+    state.w = Math.max(MIN_W, worldW);
+    if (state.phase !== 'playing') state.tx = ticketX(state.w);
   }
 
-  function panel(x, y, w, h) {
-    ctx.fillStyle = 'rgba(36,27,61,0.80)';
-    ctx.fillRect(x, y, w, h);
-    ctx.strokeStyle = PAPER;
-    ctx.lineWidth = 2;
-    ctx.strokeRect(x + 1, y + 1, w - 2, h - 2);
+  // --- Overlays -----------------------------------------------------------
+  function setPhase(phase) {
+    stage.setAttribute('data-phase', phase);
+    readyEl.hidden = phase !== 'ready';
+    bestEl.hidden = !(best > 0);
+    bestEl.textContent = 'Your best: ' + best;
+    fullBtn.hidden = !document.fullscreenEnabled || phase === 'playing';
   }
 
-  function drawHud() {
-    if (state === PLAYING || state === DEAD) {
-      pixelText(String(score), W / 2, 86, 46, PAPER);
-    }
-
-    if (state === READY) {
-      pixelText('FLAPPY TICKET', W / 2, 132, 28, ACCENT);
-      pixelText('tap to flap', W / 2, 172, 15, PAPER);
-      pixelText('best ' + best, W / 2, 200, 13, PAPER);
-      // Tap prompt arrow
-      var a = 0.55 + Math.sin(bobT * 5) * 0.35;
-      ctx.globalAlpha = a;
-      pixelText('▲', W / 2, 300 + Math.sin(bobT * 5) * 4, 20, PAPER);
-      ctx.globalAlpha = 1;
-    }
-
-    if (state === DEAD && deadT > 0.35) {
-      var medal = score >= 40 ? 'PLATINUM' : score >= 25 ? 'GOLD' : score >= 10 ? 'SILVER' : score >= 3 ? 'BRONZE' : '—';
-      panel(48, 220, W - 96, 150);
-      pixelText('GAME OVER', W / 2, 252, 24, ACCENT);
-      pixelText('score  ' + score, W / 2, 292, 16, PAPER);
-      pixelText('best   ' + best, W / 2, 316, 16, PAPER);
-      pixelText('medal  ' + medal, W / 2, 342, 13, PAPER);
-      if (deadT > 0.65) {
-        ctx.globalAlpha = 0.55 + Math.sin(bobT * 5) * 0.35;
-        pixelText('tap to retry', W / 2, 400, 14, PAPER);
-        ctx.globalAlpha = 1;
+  function el(tag, attrs, children) {
+    var node = document.createElement(tag);
+    if (attrs) {
+      for (var k in attrs) {
+        if (k === 'text') node.textContent = attrs[k];
+        else if (k === 'on') {
+          for (var ev in attrs.on) node.addEventListener(ev, attrs.on[ev]);
+        } else node.setAttribute(k, attrs[k]);
       }
     }
+    (children || []).forEach(function (c) { if (c) node.appendChild(c); });
+    return node;
   }
+
+  function shareUrl() {
+    return window.location.origin + window.location.pathname;
+  }
+
+  function renderCard() {
+    cardEl.textContent = '';
+    if (!lastRun) {
+      cardEl.hidden = true;
+      return;
+    }
+    var run = lastRun;
+    var medal = medalFor(run.score);
+    var board = readBoard();
+    var me = handle;
+
+    var rows = board.slice(0, 5).map(function (r, i) {
+      return el('li', r.handle === me ? { class: 'is-you' } : null, [
+        el('span', { class: 'fl-board-n', text: String(i + 1) }),
+        el('span', { class: 'fl-board-h', text: '@' + r.handle }),
+        el('b', { text: String(r.best) })
+      ]);
+    });
+    var rank = -1;
+    for (var i = 0; i < board.length; i++) if (board[i].handle === me) rank = i + 1;
+
+    var boardEl = el('div', { class: 'fl-board', 'aria-label': 'Top scores' }, [
+      rows.length
+        ? el('ol', null, rows)
+        : el('p', { class: 'fl-board-empty', text: "Nobody's on the board yet. Score one and you're first." }),
+      rank > 5
+        ? el('p', { class: 'fl-board-me', text: "You're #" + rank + ' of ' + board.length + ' with ' + board[rank - 1].best + '.' })
+        : null
+    ]);
+
+    var join = null;
+    if (run.score > 0 && !me) {
+      var input = el('input', {
+        id: 'fl-handle', placeholder: 'your X handle', autocomplete: 'off',
+        autocapitalize: 'off', spellcheck: 'false', maxlength: '16'
+      });
+      var addBtn = el('button', { type: 'submit', class: 'fl-btn', text: 'Add', disabled: '' });
+      input.addEventListener('input', function () { addBtn.disabled = !input.value.trim(); });
+      join = el('form', {
+        class: 'fl-join',
+        on: {
+          submit: function (e) {
+            e.preventDefault();
+            var h = input.value.trim().replace(/^@/, '');
+            if (!h) return;
+            handle = h;
+            save(KEY_HANDLE, h);
+            postScore(h, run.score);
+            renderCard();
+          }
+        }
+      }, [
+        el('label', { for: 'fl-handle', text: 'Put this score on the board' }),
+        el('div', null, [input, addBtn])
+      ]);
+    }
+
+    var posting = me
+      ? el('p', { class: 'fl-posting' }, [
+        document.createTextNode('Playing as @' + me + '. '),
+        el('button', {
+          type: 'button', text: 'Not you?',
+          on: { click: function () { handle = ''; forget(KEY_HANDLE); renderCard(); } }
+        })
+      ])
+      : null;
+
+    var tweet = 'I flew a Breakpoint ticket through ' + run.score + ' London phone ' +
+      (run.score === 1 ? 'box' : 'boxes') + '.\n\nYour turn: ' + shareUrl();
+
+    var again = el('button', { type: 'button', class: 'fl-btn fl-btn-go', text: 'Fly again', on: { click: restart } });
+
+    cardEl.appendChild(el('div', { class: 'fl-card-stub' }, [
+      el('span', {
+        class: 'fl-card-medal',
+        'data-medal': medal ? medal.name.toLowerCase() : 'none',
+        text: medal ? medal.name : 'No medal'
+      })
+    ]));
+    cardEl.appendChild(el('div', { class: 'fl-card-body' }, [
+      el('p', { class: 'fl-card-k', text: run.record && run.score > 0 ? 'New best' : 'Grounded' }),
+      el('div', { class: 'fl-card-scores' }, [
+        el('div', null, [el('b', { text: String(run.score) }), el('span', { text: run.score === 1 ? 'box' : 'boxes' })]),
+        el('div', null, [el('b', { text: String(run.best) }), el('span', { text: 'best' })])
+      ]),
+      el('p', { class: 'fl-card-note', text: medal ? medal.note : 'Ten boxes gets you bronze.' }),
+      boardEl,
+      join,
+      posting,
+      el('div', { class: 'fl-card-actions' }, [
+        again,
+        el('a', {
+          class: 'fl-btn',
+          href: 'https://x.com/intent/tweet?text=' + encodeURIComponent(tweet),
+          target: '_blank',
+          rel: 'noreferrer',
+          text: 'Post on X'
+        })
+      ])
+    ]));
+    cardEl.hidden = false;
+    if (me || run.score === 0) again.focus({ preventScroll: true });
+  }
+
+  // --- Input --------------------------------------------------------------
+  function flap() {
+    if (state.phase === 'dead') return;
+    if (state.phase === 'ready') {
+      state.phase = 'playing';
+      state.cols = [makeColumn(state.w + COL_SPAWN_PAD, 0, Math.random)];
+      setPhase('playing');
+    }
+    state.v = FLAP_V;
+    state.flapAt = state.t;
+  }
+
+  function restart() {
+    window.clearTimeout(cardTimer);
+    state = freshState(state.w);
+    lastRun = null;
+    renderCard();
+    resize();
+    setPhase('ready');
+  }
+
+  function onDeath() {
+    var prevBest = readBest();
+    var record = state.score > prevBest;
+    if (record) save(KEY_BEST, String(state.score));
+    best = Math.max(prevBest, state.score);
+    setPhase('dead');
+    var score = state.score;
+    cardTimer = window.setTimeout(function () {
+      if (score > 0 && handle) postScore(handle, score);
+      lastRun = { score: score, best: best, record: record };
+      renderCard();
+    }, CARD_DELAY_MS);
+  }
+
+  stage.addEventListener('pointerdown', function (e) {
+    if (e.button !== 0 || e.target.closest('.fl-card, a, button')) return;
+    e.preventDefault();
+    flap();
+  });
+
+  window.addEventListener('keydown', function (e) {
+    if (e.target instanceof HTMLElement && e.target.closest('a, button, input, textarea')) return;
+    if (['Space', 'ArrowUp', 'KeyW', 'Enter'].indexOf(e.code) < 0) return;
+    e.preventDefault();
+    if (state.phase === 'dead') {
+      if (lastRun && e.code !== 'ArrowUp' && e.code !== 'KeyW') restart();
+      return;
+    }
+    if (e.code !== 'Enter') flap();
+  });
+
+  fullBtn.addEventListener('click', function () {
+    if (document.fullscreenElement) document.exitFullscreen().catch(function () {});
+    else document.documentElement.requestFullscreen().catch(function () {});
+  });
+  document.addEventListener('fullscreenchange', function () {
+    var on = !!document.fullscreenElement;
+    fullBtn.setAttribute('aria-pressed', String(on));
+    fullBtn.textContent = on ? 'Exit full screen' : 'Full screen';
+  });
+
+  // --- Render -------------------------------------------------------------
+  var scrolled = 0;           // total world scroll, drives parallax
 
   function render() {
-    drawSky();
-    drawSkyline();
-    drawPipes();
-    drawGround();
-    drawTicket();
-    drawHud();
-    if (flashA > 0) {
-      ctx.fillStyle = 'rgba(255,255,255,' + flashA.toFixed(3) + ')';
-      ctx.fillRect(0, 0, W, H);
+    var s = state;
+    var w = s.w;
+    var sinceDeath = s.phase === 'dead' ? s.t - s.deadAt : 1;
+
+    ctx.save();
+    if (!reducedMotion && sinceDeath < 0.25) {
+      var amp = 8 * (1 - 4 * sinceDeath);
+      ctx.translate((Math.random() - 0.5) * amp, (Math.random() - 0.5) * amp);
     }
+
+    // Sky, including any extra height above the world.
+    ctx.fillStyle = SKY_TOP;
+    ctx.fillRect(-10, -topPad - 10, w + 20, topPad + 10);
+    ctx.fillStyle = skyGradient;
+    ctx.fillRect(-10, 0, w + 20, GROUND_Y);
+
+    // Setting sun.
+    var sunX = Math.min(0.72 * w, w - 60);
+    ctx.fillStyle = 'rgba(255, 232, 186, .55)';
+    ctx.beginPath();
+    ctx.arc(sunX, 452, 44, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#FFE7B8';
+    ctx.beginPath();
+    ctx.arc(sunX, 452, 30, 0, Math.PI * 2);
+    ctx.fill();
+
+    var far = 0.18 * scrolled;
+    for (var x = -(far % SKY_TILE); x < w; x += SKY_TILE) {
+      var idx = Math.round((far + x) / SKY_TILE);
+      drawFarCity(ctx, x, ((idx % 3) + 3) % 3);
+    }
+    for (var nx = -((0.45 * scrolled) % SKY_TILE); nx < w; nx += SKY_TILE) drawStreet(ctx, nx);
+
+    for (var i = 0; i < s.cols.length; i++) {
+      var c = s.cols[i];
+      drawPhoneBoxes(ctx, c.x, c.gapY - c.gap / 2, -20, -1, uiFont);
+      drawPhoneBoxes(ctx, c.x, c.gapY + c.gap / 2, GROUND_Y, 1, uiFont);
+    }
+
+    // Kerb, road and lane markings.
+    ctx.fillStyle = '#9A93A6';
+    ctx.fillRect(-10, GROUND_Y, w + 20, 8);
+    ctx.fillStyle = '#34303E';
+    ctx.fillRect(-10, GROUND_Y + 8, w + 20, 94);
+    ctx.fillStyle = '#F2EBDD';
+    for (var d = -(scrolled % 48); d < w; d += 48) ctx.fillRect(d, 600, 26, 4);
+
+    drawTicket(ctx, s, signFont);
+
+    if (s.phase !== 'ready') {
+      ctx.font = '900 60px ' + signFont;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'top';
+      ctx.lineJoin = 'round';
+      ctx.lineWidth = 8;
+      ctx.strokeStyle = INK;
+      ctx.strokeText(String(s.score), w / 2, 34);
+      ctx.fillStyle = '#FFFFFF';
+      ctx.fillText(String(s.score), w / 2, 34);
+    }
+
+    if (s.phase === 'dead' && sinceDeath < 0.12) {
+      ctx.fillStyle = 'rgba(255,255,255,' + 0.7 * (1 - sinceDeath / 0.12) + ')';
+      ctx.fillRect(-10, -topPad - 10, w + 20, WORLD_H + topPad + 20);
+    }
+    ctx.restore();
   }
 
-  // --- Main loop (fixed timestep) -----------------------------------------
-  var last = 0;
+  // --- Main loop ----------------------------------------------------------
   var acc = 0;
+  var lastNow = performance.now();
 
   function frame(now) {
-    if (!last) last = now;
-    var dt = (now - last) / 1000;
-    last = now;
-    if (dt > 0.25) dt = 0.25; // tab was backgrounded; don't teleport
-    acc += dt;
+    window.requestAnimationFrame(frame);
+    acc += Math.min(MAX_FRAME, (now - lastNow) / 1000);
+    lastNow = now;
     while (acc >= STEP) {
-      step(STEP);
       acc -= STEP;
+      if (state.phase !== 'dead') scrolled += SCROLL * STEP;
+      if (tick(state, Math.random)) onDeath();
     }
     render();
-    window.requestAnimationFrame(frame);
   }
 
-  // Crisp rendering on high-DPI displays.
-  function fitDpr() {
-    var dpr = Math.min(window.devicePixelRatio || 1, 3);
-    canvas.width = W * dpr;
-    canvas.height = H * dpr;
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.imageSmoothingEnabled = true;
-  }
+  skyGradient = ctx.createLinearGradient(0, 0, 0, GROUND_Y);
+  skyGradient.addColorStop(0, SKY_TOP);
+  skyGradient.addColorStop(0.62, '#D99AA6');
+  skyGradient.addColorStop(1, '#F6C08A');
 
-  fitDpr();
-  window.addEventListener('resize', fitDpr);
+  resize();
+  if (window.ResizeObserver) new ResizeObserver(resize).observe(stage);
+  else window.addEventListener('resize', resize);
+  setPhase('ready');
   window.requestAnimationFrame(frame);
 
-  // Exposed for the headless verification script.
+  // Hooks for headless tests.
   window.__flappy = {
-    config: {
-      W: W, H: H, FLOOR: FLOOR, GRAVITY: GRAVITY, FLAP_IMPULSE: FLAP_IMPULSE,
-      MAX_FALL: MAX_FALL, PIPE_SPEED: PIPE_SPEED, PIPE_W: PIPE_W,
-      PIPE_GAP: PIPE_GAP, PIPE_SPACING: PIPE_SPACING
-    },
-    state: function () {
-      return {
-        state: state, score: score, best: best, y: ticket.y, vy: ticket.vy,
-        pipes: pipes.map(function (p) { return { x: p.x, gapY: p.gapY }; })
-      };
-    },
-    flap: flap
+    state: function () { return state; },
+    flap: flap,
+    restart: restart
   };
 })();
