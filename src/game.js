@@ -26,6 +26,12 @@
   var FLAP_V = -470;
   var MAX_FALL = 720;
   var DEATH_HOP = -160;        // upward kick when you hit something
+  // Tap and hold: after HOLD_DELAY a held press stops gravity and eases the
+  // ticket toward a steady climb. Taps shorter than HOLD_DELAY are plain
+  // flaps, identical to the original.
+  var HOLD_DELAY = 0.12;
+  var HOLD_CLIMB = -300;
+  var HOLD_EASE = 10;          // per second, toward HOLD_CLIMB
   var SCROLL = 150;            // world scroll speed
   var COL_SPACING = 214;       // distance between phone box columns
   var COL_SPAWN_PAD = 30;      // columns spawn this far past the right edge
@@ -129,7 +135,8 @@
       score: 0,
       t: 0,
       flapAt: -1,
-      deadAt: 0
+      deadAt: 0,
+      held: false
     };
   }
 
@@ -157,6 +164,10 @@
     return false;
   }
 
+  function isClimbing(s) {
+    return s.held && s.phase === 'playing' && s.t - s.flapAt >= HOLD_DELAY;
+  }
+
   // Advances one fixed step. Returns true on the step the ticket dies.
   function tick(s, rand) {
     s.t += STEP;
@@ -166,7 +177,8 @@
       return false;
     }
 
-    s.v = Math.min(MAX_FALL, s.v + GRAVITY * STEP);
+    if (isClimbing(s)) s.v += (HOLD_CLIMB - s.v) * Math.min(1, HOLD_EASE * STEP);
+    else s.v = Math.min(MAX_FALL, s.v + GRAVITY * STEP);
     s.y += s.v * STEP;
 
     if (s.phase === 'dead') {
@@ -336,6 +348,7 @@
     var w = TICKET.w, h = TICKET.h;
     var tilt = s.phase === 'ready' ? 0 : Math.max(-0.42, Math.min(1.25, s.v / 560));
     var sinceFlap = s.t - (s.flapAt < 0 ? -10 : s.flapAt);
+    if (isClimbing(s)) sinceFlap %= 0.3; // keep beating while held
     var beat = sinceFlap < 0.3
       ? Math.sin((sinceFlap / 0.3) * Math.PI * 2)
       : 0.35 * Math.sin(7 * s.t);
@@ -585,8 +598,31 @@
     state.flapAt = state.t;
   }
 
+  // Every pointer or key currently held down. The ticket climbs while any
+  // of them is still down; a press that only restarts the game is not added.
+  var pressed = {};
+
+  function press(id) {
+    if (pressed[id]) return;
+    if (state.phase === 'dead') return;
+    pressed[id] = true;
+    flap();
+    state.held = true;
+  }
+
+  function release(id) {
+    delete pressed[id];
+    state.held = Object.keys(pressed).length > 0;
+  }
+
+  function releaseAll() {
+    pressed = {};
+    state.held = false;
+  }
+
   function restart() {
     window.clearTimeout(cardTimer);
+    releaseAll();
     state = freshState(state.w);
     lastRun = null;
     renderCard();
@@ -611,19 +647,31 @@
   stage.addEventListener('pointerdown', function (e) {
     if (e.button !== 0 || e.target.closest('.fl-card, a, button')) return;
     e.preventDefault();
-    flap();
+    press('p' + e.pointerId);
+  });
+  // Listen on window so a finger or cursor that slides off the stage
+  // still ends the hold.
+  window.addEventListener('pointerup', function (e) { release('p' + e.pointerId); });
+  window.addEventListener('pointercancel', function (e) { release('p' + e.pointerId); });
+  // A long press must not open the touch context menu.
+  stage.addEventListener('contextmenu', function (e) { e.preventDefault(); });
+  window.addEventListener('blur', releaseAll);
+  document.addEventListener('visibilitychange', function () {
+    if (document.hidden) releaseAll();
   });
 
   window.addEventListener('keydown', function (e) {
     if (e.target instanceof HTMLElement && e.target.closest('a, button, input, textarea')) return;
     if (['Space', 'ArrowUp', 'KeyW', 'Enter'].indexOf(e.code) < 0) return;
     e.preventDefault();
+    if (e.repeat) return; // auto-repeat while held is not a new flap
     if (state.phase === 'dead') {
       if (lastRun && e.code !== 'ArrowUp' && e.code !== 'KeyW') restart();
       return;
     }
-    if (e.code !== 'Enter') flap();
+    if (e.code !== 'Enter') press('k' + e.code);
   });
+  window.addEventListener('keyup', function (e) { release('k' + e.code); });
 
   fullBtn.addEventListener('click', function () {
     if (document.fullscreenElement) document.exitFullscreen().catch(function () {});
@@ -739,6 +787,8 @@
   window.__flappy = {
     state: function () { return state; },
     flap: flap,
+    press: press,
+    release: release,
     restart: restart
   };
 })();

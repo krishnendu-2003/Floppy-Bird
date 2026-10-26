@@ -8,7 +8,8 @@ palette, scene and screens, rewritten as a dependency-free static page.
 python3 -m http.server 8080   # then open http://localhost:8080
 ```
 
-Tap, click, or press Space / ↑ / W to flap. On the game-over card, Space or
+Tap, click, or press Space / ↑ / W to flap. **Hold** any of them to keep
+climbing; let go and gravity takes over. On the game-over card, Space or
 Enter flies again.
 
 ## Layout
@@ -47,10 +48,23 @@ Physics run on a fixed 120 Hz step, with at most 50 ms simulated per frame.
 | Death | upward hop to −160 u/s, 0.25 s screen shake, 0.12 s white flash |
 | Card delay | 650 ms after death |
 
+### Tap and hold
+
+This is the one deliberate change to the original's feel. A press always
+flaps (−470 u/s). If it is still held 0.12 s later, gravity is suspended and
+the ticket eases toward a steady −300 u/s climb (10/s exponential ease),
+with the wing beating continuously. Releasing hands control back to
+gravity. Taps shorter than 0.12 s are therefore exactly the original flap.
+Works for mouse, touch (multi-touch counts as held while any finger is
+down) and keyboard; keyboard auto-repeat is ignored. Holds are cleared on
+blur, tab switch and restart. The ceiling at y = −40 still ends the run, so
+holding too long is fatal, as in the original.
+
 Medals: Bronze 10, Silver 25, Gold 50, Platinum 100.
 
 ## Differences from the original
 
+- **Tap and hold to climb** (above). The original only reacts to taps.
 - **Leaderboard is local.** The original posts scores to its own server. Here
   the board and handle live in `localStorage`, so the card shows this
   device's scores only.
